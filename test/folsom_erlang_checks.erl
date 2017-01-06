@@ -44,6 +44,7 @@
 -define(HUGEDATA, lists:seq(1,10000)).
 
 -define(DATA1, [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]).
+-define(DATA2, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]).
 
 -include("folsom.hrl").
 
@@ -59,6 +60,11 @@ create_metrics() ->
 
     ok = folsom_metrics:new_histogram(nonea, none, 5000),
 
+    ok = folsom_metrics:new_histogram(noneb, none, 10),
+    ok = folsom_metrics:new_histogram(nonec, none, 5),
+
+    ok = folsom_metrics:new_histogram(slide_sorted_a, slide_sorted, 10),
+
     ok = folsom_metrics:new_histogram(timed, none, 5000),
     ok = folsom_metrics:new_histogram(timed2, none, 5000),
 
@@ -70,6 +76,7 @@ create_metrics() ->
     ok = folsom_metrics:new_duration(duration),
 
     ok = folsom_metrics:new_spiral(spiral),
+    ok = folsom_metrics:new_spiral(spiral_no_exceptions, no_exceptions),
 
     ?debugFmt("ensuring meter tick is registered with gen_server~n", []),
     ok = ensure_meter_tick_exists(2),
@@ -83,10 +90,10 @@ create_metrics() ->
     {state, List} = folsom_meter_timer_server:dump(),
     2 = length(List),
 
-    %% check a server got started for the spiral metric
-    1 = length(supervisor:which_children(folsom_sample_slide_sup)),
+    %% check two servers got started for the spiral metrics
+    2 = length(supervisor:which_children(folsom_sample_slide_sup)),
 
-    15 = length(folsom_metrics:get_metrics()),
+    19 = length(folsom_metrics:get_metrics()),
 
     ?debugFmt("~n~nmetrics: ~p~n", [folsom_metrics:get_metrics()]).
 
@@ -97,7 +104,8 @@ tag_metrics() ->
     ok = folsom_metrics:tag_metric(<<"gauge">>, Group),
     ok = folsom_metrics:tag_metric(meter, Group),
     ok = folsom_metrics:tag_metric(spiral, Group),
-    ?debugFmt("~n~ntagged metrics: ~p, ~p, ~p, ~p and ~p in group ~p~n", [counter,counter2,<<"gauge">>,meter,spiral,Group]).
+    ok = folsom_metrics:tag_metric(spiral_no_exceptions, Group),
+    ?debugFmt("~n~ntagged metrics: ~p, ~p, ~p, ~p, ~p and ~p in group ~p~n", [counter,counter2,<<"gauge">>,meter,spiral,spiral_no_exceptions,Group]).
 
 populate_metrics() ->
     ok = folsom_metrics:notify({counter, {inc, 1}}),
@@ -110,6 +118,11 @@ populate_metrics() ->
     meck:expect(folsom_ets, notify, fun(_Event) -> meck:exception(error, something_wrong_with_ets) end),
     {'EXIT', {something_wrong_with_ets, _}} = folsom_metrics:safely_notify({unknown_counter, {inc, 1}}),
     meck:unload(folsom_ets),
+    ok = folsom_metrics:safely_histogram_timed_update(unknown_histogram, fun() -> ok end),
+    ok = folsom_metrics:safely_histogram_timed_update(unknown_histogram, fun(ok) -> ok end, [ok]),
+    3.141592653589793 = folsom_metrics:safely_histogram_timed_update(unknown_histogram, math, pi, []),
+    UnknownHistogramBegin = folsom_metrics:histogram_timed_begin(unknown_histogram),
+    {error, unknown_histogram, nonexistent_metric} = folsom_metrics:safely_histogram_timed_notify(UnknownHistogramBegin),
 
     ok = folsom_metrics:notify({<<"gauge">>, 2}),
 
@@ -122,6 +135,17 @@ populate_metrics() ->
     [ok = folsom_metrics:notify({none, Value}) || Value <- ?DATA],
 
     [ok = folsom_metrics:notify({nonea, Value}) || Value <- ?DATA1],
+
+    [ok = folsom_metrics:notify({noneb, Value}) || Value <- ?DATA2],
+
+    [ok = folsom_metrics:notify({nonec, Value}) || Value <- ?DATA2],
+
+    [ok = folsom_metrics:notify({slide_sorted_a, Value}) || Value <- ?DATA2],
+
+    ok = folsom_metrics:notify(tagged_metric, 1, meter, [a, b]),
+    ok = folsom_metrics:notify(tagged_metric, 1, meter, [c]),
+
+    {error, _, unsupported_metric_type} = folsom_metrics:notify(tagged_unknown_metric, 1, unknown_metric, [tag]),
 
     3.141592653589793 = folsom_metrics:histogram_timed_update(timed, math, pi, []),
 
@@ -162,7 +186,8 @@ populate_metrics() ->
     % simulate an interval tick
     folsom_metrics_meter_reader:tick(meter_reader),
 
-    folsom_metrics:notify_existing_metric(spiral, 100, spiral).
+    folsom_metrics:notify_existing_metric(spiral, 100, spiral),
+    folsom_metrics:notify_existing_metric(spiral_no_exceptions, 200, spiral).
 
 check_metrics() ->
     0 = folsom_metrics:get_metric_value(counter),
@@ -175,8 +200,23 @@ check_metrics() ->
 
     2 = folsom_metrics:get_metric_value(<<"gauge">>),
 
+    true = sets:is_subset(sets:from_list([a,b,c]), folsom_metrics:get_tags(tagged_metric)),
+
+    [11,12,13,14,15,6,7,8,9,10] = folsom_metrics:get_metric_value(noneb),
+
+    [11,12,13,14,15] = folsom_metrics:get_metric_value(nonec),
+
+    [6,7,8,9,10,11,12,13,14,15] = folsom_metrics:get_metric_value(slide_sorted_a),
+
     Histogram1 = folsom_metrics:get_histogram_statistics(<<"uniform">>),
     histogram_checks(Histogram1),
+
+    MetricsSubset = [min, max],
+
+    ok = set_enabled_metrics(MetricsSubset),
+    Histogram2 = folsom_metrics:get_histogram_statistics(<<"uniform">>),
+    subset_checks(Histogram2, MetricsSubset),
+    ok = set_enabled_metrics(?DEFAULT_METRICS),
 
     HugeHistogram = folsom_metrics:get_histogram_statistics(<<"hugedata">>),
     huge_histogram_checks(HugeHistogram),
@@ -238,13 +278,20 @@ check_metrics() ->
     Dur = folsom_metrics:get_metric_value(duration),
     duration_check(Dur),
 
+    ok = set_enabled_metrics(MetricsSubset),
+    Dur2 = folsom_metrics:get_metric_value(duration),
+    subset_checks(Dur2, MetricsSubset),
+    ok = set_enabled_metrics(?DEFAULT_METRICS),
+
     %% check spiral
-    [{count, 100}, {one, 100}] = folsom_metrics:get_metric_value(spiral).
+    [{count, 100}, {one, 100}] = folsom_metrics:get_metric_value(spiral),
+
+    [{count, 200}, {one, 200}] = folsom_metrics:get_metric_value(spiral_no_exceptions).
 
 check_group_metrics() ->
     Group = "mygroup",
     Metrics = folsom_metrics:get_metrics_value(Group),
-    5 = length(Metrics),
+    6 = length(Metrics),
     {counter, 0} = lists:keyfind(counter,1,Metrics),
     {counter2, 0} = lists:keyfind(counter2,1,Metrics),
     {<<"gauge">>, 2} = lists:keyfind(<<"gauge">>,1,Metrics),
@@ -264,6 +311,7 @@ check_group_metrics() ->
          end,
 
     {spiral, [{count, 100}, {one, 100}]} = lists:keyfind(spiral,1,Metrics),
+    {spiral_no_exceptions, [{count, 200}, {one, 200}]} = lists:keyfind(spiral_no_exceptions,1,Metrics),
 
     Counters = folsom_metrics:get_metrics_value(Group,counter),
     {counter, 0} = lists:keyfind(counter,1,Counters),
@@ -273,13 +321,14 @@ check_group_metrics() ->
     ok = folsom_metrics:untag_metric(<<"gauge">>, Group),
     ok = folsom_metrics:untag_metric(meter, Group),
     ok = folsom_metrics:untag_metric(spiral, Group),
-    ?debugFmt("~n~nuntagged metrics: ~p, ~p, ~p and ~p in group ~p~n", [counter2,<<"gauge">>,meter,spiral,Group]),
+    ok = folsom_metrics:untag_metric(spiral_no_exceptions, Group),
+    ?debugFmt("~n~nuntagged metrics: ~p, ~p, ~p, ~p and ~p in group ~p~n", [counter2,<<"gauge">>,meter,spiral,spiral_no_exceptions,Group]),
     RemainingMetrics = folsom_metrics:get_metrics_value(Group),
     1 = length(RemainingMetrics),
     {counter, 0} = lists:keyfind(counter,1,Metrics).
 
 delete_metrics() ->
-    17 = length(ets:tab2list(?FOLSOM_TABLE)),
+    22 = length(ets:tab2list(?FOLSOM_TABLE)),
 
     ok = folsom_metrics:delete_metric(counter),
     ok = folsom_metrics:delete_metric(counter2),
@@ -294,6 +343,13 @@ delete_metrics() ->
     ok = folsom_metrics:delete_metric(historya),
 
     ok = folsom_metrics:delete_metric(nonea),
+    ok = folsom_metrics:delete_metric(noneb),
+    ok = folsom_metrics:delete_metric(nonec),
+
+    ok = folsom_metrics:delete_metric(tagged_metric),
+
+    ok = folsom_metrics:delete_metric(slide_sorted_a),
+
     ok = folsom_metrics:delete_metric(timed),
     ok = folsom_metrics:delete_metric(timed2),
     ok = folsom_metrics:delete_metric(testcounter),
@@ -312,6 +368,7 @@ delete_metrics() ->
 
     ok = folsom_metrics:delete_metric(duration),
     ok = folsom_metrics:delete_metric(spiral),
+    ok = folsom_metrics:delete_metric(spiral_no_exceptions),
 
     0 = length(ets:tab2list(?FOLSOM_TABLE)).
 
@@ -324,6 +381,7 @@ vm_metrics() ->
 
     List3 = folsom_vm_metrics:get_system_info(),
     true = lists:keymember(allocated_areas, 1, List3),
+    true = lists:keymember(port_count, 1, List3),
 
     [{_, [{backtrace, _}| _]} | _] = folsom_vm_metrics:get_process_info(),
 
@@ -428,7 +486,7 @@ cpu_topology() ->
 
 run_convert_and_jsonify(Item) ->
     ?debugFmt("Converting ... ~n~p~n", [Item]),
-    Result = folsom_vm_metrics:convert_system_info({cpu_topology, Item}),
+    Result = folsom_vm_metrics:convert_system_info(cpu_topology, Item),
     %?debugFmt("~p~n", [mochijson2:encode(Result)]).
     mochijson2:encode(Result).
 
@@ -441,7 +499,7 @@ c_compiler_used() ->
                 [{compiler, gnuc}, {version, <<"4.4">>}],
                 [{compiler, msc}, {version, <<"1600">>}]],
 
-    ?assertEqual(Expected, [folsom_vm_metrics:convert_system_info({c_compiler_used, {Compiler, Version}})
+    ?assertEqual(Expected, [folsom_vm_metrics:convert_system_info(c_compiler_used, {Compiler, Version})
                              || {Compiler, Version} <- Test]).
 
 
@@ -464,3 +522,19 @@ create_delete_metrics() ->
     ?assertMatch(ok, folsom_metrics:new_counter(counter)),
     ?assertMatch(ok, folsom_metrics:notify_existing_metric(counter, {inc, 1}, counter)),
     ?assertMatch(1, folsom_metrics:get_metric_value(counter)).
+
+set_enabled_metrics(Enabled) ->
+    application:set_env(folsom, enabled_metrics, Enabled).
+
+subset_checks(List, Enabled) ->
+    ?debugFmt("checking subset statistics", []),
+    ?debugFmt("~p, ~p~n", [List, Enabled]),
+    Disabled = ?DEFAULT_METRICS -- Enabled,
+    true = lists:all(fun(K) ->
+                             proplists:get_value(K, List) == undefined
+                     end,
+                     Disabled),
+    true = lists:all(fun(K) ->
+                             proplists:get_value(K, List) /= undefined
+                     end,
+                     Enabled).
