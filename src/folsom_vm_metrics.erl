@@ -35,7 +35,7 @@
         ]).
 
 %% exported for eunit test
--export([convert_system_info/1]).
+-export([convert_system_info/2]).
 
 -include("folsom.hrl").
 
@@ -46,10 +46,10 @@ get_memory() ->
     erlang:memory().
 
 get_statistics() ->
-    [{Key, convert_statistics({Key, erlang:statistics(Key)})} || Key <- ?STATISTICS].
+    [{Key, convert_statistics(Key, get_statistics(Key))} || Key <- ?STATISTICS].
 
 get_system_info() ->
-    [{Key, convert_system_info({Key, erlang:system_info(Key)})} || Key <- ?SYSTEM_INFO].
+    [{Key, convert_system_info(Key, get_system_info(Key))} || Key <- ?SYSTEM_INFO].
 
 get_process_info() ->
     [{pid_port_fun_to_atom(Pid), get_process_info(Pid)} || Pid <- processes()].
@@ -65,59 +65,72 @@ get_dets_info() ->
 
 % internal functions
 
+% wrap system_info and statistics in a try/catch in case keys are missing
+% in old/new versions of erlang
+
+get_system_info(Key) ->
+    try erlang:system_info(Key) catch
+                                    error:badarg->undefined
+                                end.
+
+get_statistics(Key) ->
+    try erlang:statistics(Key) catch
+                                   error:badarg->undefined
+                               end.
+
 %% conversion functions for erlang:statistics(Key)
 
-convert_statistics({context_switches, {ContextSwitches, 0}}) ->
+convert_statistics(context_switches, {ContextSwitches, 0}) ->
     ContextSwitches;
-convert_statistics({garbage_collection, {NumberofGCs, WordsReclaimed, 0}}) ->
-    [{"number_of_gcs", NumberofGCs}, {"words_reclaimed", WordsReclaimed}];
-convert_statistics({io, {Input, Output}}) ->
+convert_statistics(garbage_collection, {NumberofGCs, WordsReclaimed, 0}) ->
+    [{number_of_gcs, NumberofGCs}, {words_reclaimed, WordsReclaimed}];
+convert_statistics(io, {Input, Output}) ->
     [Input, Output];
-convert_statistics({reductions, {TotalReductions, ReductionsSinceLastCall}}) ->
-    [{"total_reductions", TotalReductions},
-     {"reductions_since_last_call", ReductionsSinceLastCall}];
-convert_statistics({runtime, {TotalRunTime, TimeSinceLastCall}}) ->
-    [{"total_run_time", TotalRunTime}, {"time_since_last_call", TimeSinceLastCall}];
-convert_statistics({wall_clock, {TotalWallclockTime, WallclockTimeSinceLastCall}}) ->
-    [{"Total_Wall_Clock_time", TotalWallclockTime},
-     {"wall_clock_time_since_last_call", WallclockTimeSinceLastCall}];
-convert_statistics({_, Value}) ->
+convert_statistics(reductions, {TotalReductions, ReductionsSinceLastCall}) ->
+    [{total_reductions, TotalReductions},
+     {reductions_since_last_call, ReductionsSinceLastCall}];
+convert_statistics(runtime, {TotalRunTime, TimeSinceLastCall}) ->
+    [{total_run_time, TotalRunTime}, {time_since_last_call, TimeSinceLastCall}];
+convert_statistics(wall_clock, {TotalWallclockTime, WallclockTimeSinceLastCall}) ->
+    [{total_wall_clock_time, TotalWallclockTime},
+     {wall_clock_time_since_last_call, WallclockTimeSinceLastCall}];
+convert_statistics(_, Value) ->
     Value.
 
 %% conversion functions for erlang:system_info(Key)
 
-convert_system_info({allocated_areas, List}) ->
+convert_system_info(allocated_areas, List) ->
     [convert_allocated_areas(Value) || Value <- List];
-convert_system_info({allocator, {_,_,_,List}}) ->
+convert_system_info(allocator, {_,_,_,List}) ->
     List;
-convert_system_info({c_compiler_used, {Compiler, Version}}) ->
+convert_system_info(c_compiler_used, {Compiler, Version}) ->
     [{compiler, Compiler}, {version, convert_c_compiler_version(Version)}];
-convert_system_info({cpu_topology, undefined}) ->
+convert_system_info(cpu_topology, undefined) ->
     undefined;
-convert_system_info({cpu_topology, List}) when is_list(List) ->
+convert_system_info(cpu_topology, List) when is_list(List) ->
     [{Type, convert_cpu_topology(Item, [])} || {Type, Item} <- List];
-convert_system_info({cpu_topology, {logical,Item}}) ->
-    convert_system_info({cpu_topology, [{processor,[{core,{logical,Item}}]}]});
-convert_system_info({dist_ctrl, List}) ->
+convert_system_info(cpu_topology, {logical,Item}) ->
+    convert_system_info(cpu_topology, [{processor,[{core,{logical,Item}}]}]);
+convert_system_info(dist_ctrl, List) ->
     lists:map(fun({Node, Socket}) ->
                       {ok, Stats} = inet:getstat(Socket),
                       {Node, Stats}
               end, List);
-convert_system_info({driver_version, Value}) ->
+convert_system_info(driver_version, Value) ->
     list_to_binary(Value);
-convert_system_info({machine, Value}) ->
+convert_system_info(machine, Value) ->
     list_to_binary(Value);
-convert_system_info({otp_release, Value}) ->
+convert_system_info(otp_release, Value) ->
     list_to_binary(Value);
-convert_system_info({scheduler_bindings, Value}) ->
+convert_system_info(scheduler_bindings, Value) ->
     tuple_to_list(Value);
-convert_system_info({system_version, Value}) ->
+convert_system_info(system_version, Value) ->
     list_to_binary(Value);
-convert_system_info({system_architecture, Value}) ->
+convert_system_info(system_architecture, Value) ->
     list_to_binary(Value);
-convert_system_info({version, Value}) ->
+convert_system_info(version, Value) ->
     list_to_binary(Value);
-convert_system_info({_, Value}) ->
+convert_system_info(_, Value) ->
     Value.
 
 convert_allocated_areas({Key, Value1, Value2}) ->
@@ -230,7 +243,11 @@ get_socket_sockname(Socket) ->
     end.
 
 get_ets_dets_info(Type, Tab) ->
-    [{Key, pid_port_fun_to_atom(Value)} || {Key, Value} <- Type:info(Tab)].
+    case Type:info(Tab) of
+        undefined -> [];
+        Entries when is_list(Entries) ->
+            [{Key, pid_port_fun_to_atom(Value)} || {Key, Value} <- Entries]
+    end.
 
 ip_to_binary(Tuple) ->
     iolist_to_binary(string:join(lists:map(fun integer_to_list/1, tuple_to_list(Tuple)), ".")).

@@ -44,6 +44,7 @@
 -define(HUGEDATA, lists:seq(1,10000)).
 
 -define(DATA1, [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50]).
+-define(DATA2, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]).
 
 -include("folsom.hrl").
 
@@ -58,6 +59,11 @@ create_metrics() ->
     ok = folsom_metrics:new_histogram(none, none, 5000),
 
     ok = folsom_metrics:new_histogram(nonea, none, 5000),
+
+    ok = folsom_metrics:new_histogram(noneb, none, 10),
+    ok = folsom_metrics:new_histogram(nonec, none, 5),
+
+    ok = folsom_metrics:new_histogram(slide_sorted_a, slide_sorted, 10),
 
     ok = folsom_metrics:new_histogram(timed, none, 5000),
     ok = folsom_metrics:new_histogram(timed2, none, 5000),
@@ -86,7 +92,7 @@ create_metrics() ->
     %% check a server got started for the spiral metric
     1 = length(supervisor:which_children(folsom_sample_slide_sup)),
 
-    15 = length(folsom_metrics:get_metrics()),
+    18 = length(folsom_metrics:get_metrics()),
 
     ?debugFmt("~n~nmetrics: ~p~n", [folsom_metrics:get_metrics()]).
 
@@ -109,6 +115,11 @@ populate_metrics() ->
     meck:new(folsom_ets),
     meck:expect(folsom_ets, notify, fun(_Event) -> meck:exception(error, something_wrong_with_ets) end),
     {'EXIT', {something_wrong_with_ets, _}} = folsom_metrics:safely_notify({unknown_counter, {inc, 1}}),
+    ok = folsom_metrics:safely_histogram_timed_update(unknown_histogram, fun() -> ok end),
+    ok = folsom_metrics:safely_histogram_timed_update(unknown_histogram, fun(ok) -> ok end, [ok]),
+    3.141592653589793 = folsom_metrics:safely_histogram_timed_update(unknown_histogram, math, pi, []),
+    UnknownHistogramBegin = folsom_metrics:histogram_timed_begin(unknown_histogram),
+    {error, unknown_histogram, nonexistent_metric} = folsom_metrics:safely_histogram_timed_notify(UnknownHistogramBegin),
     meck:unload(folsom_ets),
 
     ok = folsom_metrics:notify({<<"gauge">>, 2}),
@@ -122,6 +133,17 @@ populate_metrics() ->
     [ok = folsom_metrics:notify({none, Value}) || Value <- ?DATA],
 
     [ok = folsom_metrics:notify({nonea, Value}) || Value <- ?DATA1],
+
+    [ok = folsom_metrics:notify({noneb, Value}) || Value <- ?DATA2],
+
+    [ok = folsom_metrics:notify({nonec, Value}) || Value <- ?DATA2],
+
+    [ok = folsom_metrics:notify({slide_sorted_a, Value}) || Value <- ?DATA2],
+
+    ok = folsom_metrics:notify(tagged_metric, 1, meter, [a, b]),
+    ok = folsom_metrics:notify(tagged_metric, 1, meter, [c]),
+
+    {error, _, unsupported_metric_type} = folsom_metrics:notify(tagged_unknown_metric, 1, unknown_metric, [tag]),
 
     3.141592653589793 = folsom_metrics:histogram_timed_update(timed, math, pi, []),
 
@@ -174,6 +196,14 @@ check_metrics() ->
     0 = folsom_metrics:get_metric_value(counter2),
 
     2 = folsom_metrics:get_metric_value(<<"gauge">>),
+
+    true = sets:is_subset(sets:from_list([a,b,c]), folsom_metrics:get_tags(tagged_metric)),
+
+    [11,12,13,14,15,6,7,8,9,10] = folsom_metrics:get_metric_value(noneb),
+
+    [11,12,13,14,15] = folsom_metrics:get_metric_value(nonec),
+
+    [6,7,8,9,10,11,12,13,14,15] = folsom_metrics:get_metric_value(slide_sorted_a),
 
     Histogram1 = folsom_metrics:get_histogram_statistics(<<"uniform">>),
     histogram_checks(Histogram1),
@@ -279,7 +309,7 @@ check_group_metrics() ->
     {counter, 0} = lists:keyfind(counter,1,Metrics).
 
 delete_metrics() ->
-    17 = length(ets:tab2list(?FOLSOM_TABLE)),
+    21 = length(ets:tab2list(?FOLSOM_TABLE)),
 
     ok = folsom_metrics:delete_metric(counter),
     ok = folsom_metrics:delete_metric(counter2),
@@ -294,6 +324,13 @@ delete_metrics() ->
     ok = folsom_metrics:delete_metric(historya),
 
     ok = folsom_metrics:delete_metric(nonea),
+    ok = folsom_metrics:delete_metric(noneb),
+    ok = folsom_metrics:delete_metric(nonec),
+
+    ok = folsom_metrics:delete_metric(tagged_metric),
+
+    ok = folsom_metrics:delete_metric(slide_sorted_a),
+
     ok = folsom_metrics:delete_metric(timed),
     ok = folsom_metrics:delete_metric(timed2),
     ok = folsom_metrics:delete_metric(testcounter),
@@ -428,7 +465,7 @@ cpu_topology() ->
 
 run_convert_and_jsonify(Item) ->
     ?debugFmt("Converting ... ~n~p~n", [Item]),
-    Result = folsom_vm_metrics:convert_system_info({cpu_topology, Item}),
+    Result = folsom_vm_metrics:convert_system_info(cpu_topology, Item),
     %?debugFmt("~p~n", [mochijson2:encode(Result)]).
     mochijson2:encode(Result).
 
@@ -441,7 +478,7 @@ c_compiler_used() ->
                 [{compiler, gnuc}, {version, <<"4.4">>}],
                 [{compiler, msc}, {version, <<"1600">>}]],
 
-    ?assertEqual(Expected, [folsom_vm_metrics:convert_system_info({c_compiler_used, {Compiler, Version}})
+    ?assertEqual(Expected, [folsom_vm_metrics:convert_system_info(c_compiler_used, {Compiler, Version})
                              || {Compiler, Version} <- Test]).
 
 
