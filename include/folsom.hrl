@@ -20,7 +20,9 @@
                                                  [set,
                                                   {write_concurrency, true},
                                                   public]),
-          server
+          server,
+          update = update_counter :: update_counter |
+                                     update_counter_no_exception
          }).
 
 -record(slide, {
@@ -57,8 +59,14 @@
 
 -record(none, {
           size = ?DEFAULT_SIZE,
-          n = 0,
+          n = 1,
           reservoir = folsom_metrics_histogram_ets:new(folsom_none,[ordered_set, {write_concurrency, true}, public])
+         }).
+
+-record(slide_sorted, {
+          size = ?DEFAULT_SIZE,
+          n = 0,
+          reservoir = folsom_metrics_histogram_ets:new(folsom_slide_sorted,[ordered_set, {write_concurrency, true}, public])
          }).
 
 -record(histogram, {
@@ -104,6 +112,7 @@
                       multi_scheduling,
                       multi_scheduling_blockers,
                       otp_release,
+                      port_count,
                       process_count,
                       process_limit,
                       scheduler_bind_type,
@@ -186,3 +195,19 @@
                       priority,
                       tos
                      ]).
+
+-define(DEFAULT_METRICS, [
+                          arithmetic_mean,
+                          geometric_mean,
+                          harmonic_mean,
+                          histogram,
+                          kurtosis,
+                          n,
+                          max,
+                          median,
+                          min,
+                          {percentile, [50, 75, 95, 99, 999]},
+                          skewness,
+                          standard_deviation,
+                          variance
+                         ]).
