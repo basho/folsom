@@ -16,14 +16,14 @@
 
 
 %%%-------------------------------------------------------------------
-%%% File:      folsom_sample_none.erl
-%%% @author    joe williams <j@boundary.com>
+%%% File:      folsom_sample_slide_sorted.erl
+%%% @author    Ramon Lastres <ramon.lastres@erlang-solutions.com>
 %%% @doc
-%%% no sampling, just a capped circular buffer
+%%% simple sliding window histogram.
 %%% @end
 %%%-----------------------------------------------------------------
 
--module(folsom_sample_none).
+-module(folsom_sample_slide_sorted).
 
 -export([
          new/1,
@@ -34,16 +34,19 @@
 -include("folsom.hrl").
 
 new(Size) ->
-    #none{size = Size}.
+    #slide_sorted{size = Size}.
 
-update(#none{size = Size, reservoir = Reservoir, n = N} = Sample, Value)
-  when N =:= Size ->
-    ets:insert(Reservoir, {N, Value}),
-    Sample#none{n = 1};
-update(#none{reservoir = Reservoir, n = N} = Sample, Value) ->
-    ets:insert(Reservoir, {N, Value}),
-    Sample#none{n = N  + 1}.
+update(#slide_sorted{size = Size, reservoir = Reservoir, n = N} = Sample, Value)
+  when N < Size ->
+    ets:insert(Reservoir, {os:timestamp(), Value}),
+    Sample#slide_sorted{n = N + 1};
+update(#slide_sorted{reservoir = Reservoir, n = N, size = Size} = Sample, Value)
+  when N == Size ->
+    Oldest = ets:first(Reservoir),
+    ets:delete(Reservoir, Oldest),
+    ets:insert(Reservoir, {os:timestamp(), Value}),
+    Sample.
 
-get_values(#none{reservoir = Reservoir}) ->
+get_values(#slide_sorted{reservoir = Reservoir}) ->
     {_, Values} = lists:unzip(ets:tab2list(Reservoir)),
     Values.
