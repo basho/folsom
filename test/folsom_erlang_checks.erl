@@ -115,12 +115,12 @@ populate_metrics() ->
     meck:new(folsom_ets),
     meck:expect(folsom_ets, notify, fun(_Event) -> meck:exception(error, something_wrong_with_ets) end),
     {'EXIT', {something_wrong_with_ets, _}} = folsom_metrics:safely_notify({unknown_counter, {inc, 1}}),
+    meck:unload(folsom_ets),
     ok = folsom_metrics:safely_histogram_timed_update(unknown_histogram, fun() -> ok end),
     ok = folsom_metrics:safely_histogram_timed_update(unknown_histogram, fun(ok) -> ok end, [ok]),
     3.141592653589793 = folsom_metrics:safely_histogram_timed_update(unknown_histogram, math, pi, []),
     UnknownHistogramBegin = folsom_metrics:histogram_timed_begin(unknown_histogram),
     {error, unknown_histogram, nonexistent_metric} = folsom_metrics:safely_histogram_timed_notify(UnknownHistogramBegin),
-    meck:unload(folsom_ets),
 
     ok = folsom_metrics:notify({<<"gauge">>, 2}),
 
@@ -459,7 +459,15 @@ for(N, LoopCount, Counter) ->
 
 cpu_topology() ->
     ?debugFmt("Testing various CPU topologies ...~n", []),
-    {ok, [Data]} = file:consult("../test/cpu_topo_data"),
+    % Assume the "test" directory is a child of the beam directory's parent
+    % (depending on Rebar version, it may or may not be the same directory).
+    % This assumption *should* hold in Rebar2 and Rebar3.
+    % The module *may* be cover compiled, so just use the more heavyweight
+    % approach right off the bat.
+    {_, _, Beam} = code:get_object_code(?MODULE),
+    File = filename:join(
+        [filename:dirname(filename:dirname(Beam)), "test", "cpu_topo_data"]),
+    {ok, [Data]} = file:consult(File),
     [run_convert_and_jsonify(Item) || Item <- Data].
 
 
