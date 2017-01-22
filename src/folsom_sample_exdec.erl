@@ -33,14 +33,20 @@
 -module(folsom_sample_exdec).
 
 -export([
-         new/2,
-         update/2,
-         get_values/1
-        ]).
-
--define(HOURSECS, 3600).
+    new/2,
+    update/2,
+    get_values/1
+]).
 
 -include("folsom.hrl").
+
+-ifdef(NO_RAND_MODULE).
+-define(rand_mod,   random).
+-else.
+-define(rand_mod,   rand).
+-endif.
+
+-define(HOURSECS, 3600).
 
 new(Size, Alpha) ->
     Now = folsom_utils:now_epoch(),
@@ -64,7 +70,7 @@ get_values(#exdec{reservoir = Reservoir}) ->
 update(#exdec{reservoir = Reservoir, alpha = Alpha, start = Start, n = N, size = Size, seed = Seed} = Sample, Value, Timestamp) when N =< Size ->
     % since N is =< Size we can just add the new value to the sample
 
-    {Rand, New_seed} = random:uniform_s(N, Seed),
+    {Rand, New_seed} = ?rand_mod:uniform_s(N, Seed),
     Priority = priority(Alpha, Timestamp, Start, Rand),
     true = ets:insert(Reservoir, {Priority, Value}),
 
@@ -73,7 +79,7 @@ update(#exdec{reservoir = Reservoir, alpha = Alpha, start = Start, n = N, seed =
     % when N is not =< Size we need to check to see if the priority of
     % the new value is greater than the first (smallest) existing priority
 
-    {Rand, NewSeed} = random:uniform_s(N, Seed),
+    {Rand, NewSeed} = ?rand_mod:uniform_s(N, Seed),
     Priority = priority(Alpha, Timestamp, Start, Rand),
     First = ets:first(Reservoir),
 

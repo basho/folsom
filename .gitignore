@@ -32,6 +32,7 @@ tmp/
 # Erlang build/test artifacts
 *.app
 *.beam
+/current_counterexample.eqc
 /doc/
 /ebin/
 log/

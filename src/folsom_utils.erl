@@ -25,15 +25,17 @@
 -module(folsom_utils).
 
 -export([
-         to_atom/1,
-         convert_tags/1,
-         now_epoch/0,
-         now_epoch/1,
-         now_epoch_micro/0,
-         timestamp/0,
-         get_ets_size/1,
-         update_counter/3
-        ]).
+    to_atom/1,
+    convert_tags/1,
+    now_epoch/0,
+    now_epoch/1,
+    now_epoch_micro/0,
+    rand_seed/0,
+    rand_seed/1,
+    get_ets_size/1,
+    update_counter/3,
+    update_counter_no_exceptions/3
+]).
 
 to_atom(Binary) when is_binary(Binary) ->
     list_to_atom(binary_to_list(Binary));
@@ -53,9 +55,17 @@ now_epoch_micro() ->
     {Mega, Sec, Micro} = os:timestamp(),
     (Mega * 1000000 + Sec) * 1000000 + Micro.
 
-%% useful because you can't meck os:timestamp for some reason
-timestamp() ->
-    os:timestamp().
+rand_seed() ->
+    rand_seed(os:timestamp()).
+
+-compile({inline, rand_seed/1}).
+-ifdef(NO_RAND_MODULE).
+rand_seed({_, _, _} = Ints) ->
+    Ints.
+-else.
+rand_seed({_, _, _} = Ints) ->
+    rand:seed_s(exsplus, Ints).
+-endif.
 
 get_ets_size(Tab) ->
     ets:info(Tab, size).
@@ -79,4 +89,25 @@ update_counter(Tid, Key, Value) when is_integer(Value) ->
                     %% someone beat us to it
                     ets:update_counter(Tid, Key, Value)
             end
+    end.
+
+%% @doc
+%% Same as {@link ets:update_counter/3} but inserts `{Key, Value}' if object
+%% is missing in the table, avoiding exceptions by reading first.
+%% Won't be required after https://github.com/erlang/otp/pull/362
+update_counter_no_exceptions(Tid, Key, Value) when is_integer(Value) ->
+    %% Read counter first to avoid an exception
+    case ets:lookup(Tid, Key) of
+        [] ->
+            %% row didn't exist, create it
+            %% use insert_new to avoid races
+            case ets:insert_new(Tid, {Key, Value}) of
+                true ->
+                    Value;
+                false ->
+                    %% someone beat us to it
+                    ets:update_counter(Tid, Key, Value)
+            end;
+        _ ->
+            ets:update_counter(Tid, Key, Value)
     end.

@@ -1,26 +1,24 @@
-%%%
-%%% Copyright 2012 - Basho Technologies, Inc. All Rights Reserved.
-%%%
-%%% Licensed under the Apache License, Version 2.0 (the "License");
-%%% you may not use this file except in compliance with the License.
-%%% You may obtain a copy of the License at
-%%%
-%%%     http://www.apache.org/licenses/LICENSE-2.0
-%%%
-%%% Unless required by applicable law or agreed to in writing, software
-%%% distributed under the License is distributed on an "AS IS" BASIS,
-%%% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-%%% See the License for the specific language governing permissions and
-%%% limitations under the License.
-%%%
+%% -------------------------------------------------------------------
+%%
+%% Copyright (c) 2012-2017 Basho Technologies, Inc.
+%%
+%% This file is provided to you under the Apache License,
+%% Version 2.0 (the "License"); you may not use this file
+%% except in compliance with the License.  You may obtain
+%% a copy of the License at
+%%
+%%   http://www.apache.org/licenses/LICENSE-2.0
+%%
+%% Unless required by applicable law or agreed to in writing,
+%% software distributed under the License is distributed on an
+%% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+%% KIND, either express or implied.  See the License for the
+%% specific language governing permissions and limitations
+%% under the License.
+%%
+%% -------------------------------------------------------------------
 
-%%%-------------------------------------------------------------------
-%%% File:      slide_statem_eqc.erl
-%%% @author    Russell Brown <russelldb@basho.com>
-%%% @doc       quickcheck test for the folsom_sample_slide.erl
-%%% @end
-%%%------------------------------------------------------------------
-
+%% @doc QuickCheck test for folsom_sample_slide
 -module(slide_statem_eqc).
 
 -compile(export_all).
@@ -34,7 +32,13 @@
 -include_lib("eqc/include/eqc_statem.hrl").
 -include_lib("eunit/include/eunit.hrl").
 
-
+-ifdef(NO_RAND_MODULE).
+-define(rand_mod,       random).
+-define(seed_rand(),    ?rand_mod:seed(os:timestamp())).
+-else.
+-define(rand_mod,       rand).
+-define(seed_rand(),    ok).
+-endif.
 
 -define(QC_OUT(P),
         eqc:on_output(fun(Str, Args) ->
@@ -107,35 +111,51 @@ postcondition(_S, {call, ?MODULE, _, _}, _Res) ->
     true.
 
 prop_window_test_() ->
-    Seconds = 10,
-    {setup,
-     fun() -> ok end,
-     fun(_X) -> (catch meck:unload(folsom_utils)), folsom:stop() end,
-     [{"QuickCheck Test",
-       {timeout, Seconds*2, fun() -> true = eqc:quickcheck(eqc:testing_time(Seconds, ?QC_OUT(prop_window()))) end
-       }}]}.
+    case eqc:version() of
+        % QuickCheck changed how the eqc_statem model worked starting with v1.35,
+        % which may (or may not) be why these tests are now too flappy to use.
+        QcVsn when erlang:is_float(QcVsn) andalso QcVsn < 1.350 ->
+            Seconds = 10,
+            {setup,
+                fun() ->
+                    ?seed_rand()
+                end,
+                fun(_) ->
+                    catch meck:unload(folsom_utils),
+                    folsom:stop()
+                end, [
+                {"QuickCheck Test",
+                {timeout, Seconds*2,
+                    ?_assert(eqc:quickcheck(
+                        eqc:testing_time(Seconds, ?QC_OUT(prop_window()))))
+                }}
+            ]};
+        QcVsn ->
+            Title = lists:flatten(io_lib:format(
+                "Unsupported QuickCheck version: ~p, skipping test", [QcVsn])),
+            {Title, fun() -> skipped end}
+    end.
 
 prop_window() ->
     folsom:start(),
-    (catch meck:new(folsom_utils)),
-    ?FORALL(Cmds, commands(?MODULE),
-            aggregate(command_names(Cmds),
-            begin
-                {H, S, Res} = run_commands(?MODULE, Cmds),
-                {Actual, Expected} = case S#state.sample of
-                                         undefined ->
-                                             {S#state.values, []};
-                                         Sample ->
-                                             A = folsom_metrics:get_metric_value(S#state.name),
-                                             E = [V || {K, V} <- S#state.values, K >= S#state.moment - ?WINDOW],
-                                             folsom_metrics:delete_metric(S#state.name),
-                                             {A, E}
-                                    end,
-                ?WHENFAIL(
-                   io:format("History: ~p~nState: ~p~nActual: ~p~nExpected: ~p~nRes: ~p~n", [H, S, Actual, Expected, Res]),
-                   conjunction([{total, equals(lists:sort(Actual), lists:sort(Expected))},
-                               {eq, equals(Res, ok)}]))
-            end)).
+    catch meck:new(folsom_utils),
+    ?FORALL(Cmds, commands(?MODULE), aggregate(command_names(Cmds),
+        begin
+            {H, S, Res} = run_commands(?MODULE, Cmds),
+            {Actual, Expected} = case S#state.sample of
+                undefined ->
+                    {S#state.values, []};
+                _ ->
+                    A = folsom_metrics:get_metric_value(S#state.name),
+                    E = [V || {K, V} <- S#state.values, K >= S#state.moment - ?WINDOW],
+                    folsom_metrics:delete_metric(S#state.name),
+                    {A, E}
+            end,
+            ?WHENFAIL(
+                io:format("History: ~p~nState: ~p~nActual: ~p~nExpected: ~p~nRes: ~p~n", [H, S, Actual, Expected, Res]),
+                conjunction([{total, equals(lists:sort(Actual), lists:sort(Expected))},
+                    {eq, equals(Res, ok)}]))
+        end)).
 
 %% Commands
 new_histo() ->
@@ -146,7 +166,7 @@ new_histo() ->
     {Ref, Slide}.
 
 tick(Moment) ->
-    IncrBy = trunc(random:uniform(10)),
+    IncrBy = trunc(?rand_mod:uniform(10)),
     meck:expect(folsom_utils, now_epoch, fun() -> Moment + IncrBy end),
     Moment+IncrBy.
 
