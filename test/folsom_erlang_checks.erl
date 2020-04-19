@@ -157,10 +157,10 @@ check_metrics() ->
     % just check exdec for non-zero values
     Exdec = folsom_metrics:get_histogram_statistics(exdec),
 
-    ?debugFmt("checking exdec sample~n~p~n", [Exdec]),
+    io:format("checking exdec sample~n~p~n", [Exdec]),
 
     ok = case proplists:get_value(median, Exdec) of
-        Median when Median > 0 ->
+        Median when Median >= 0.0 ->
                  ok;
              _ ->
                  error
@@ -358,7 +358,7 @@ for(N, LoopCount, Counter) ->
 
 cpu_topology() ->
     ?debugFmt("Testing various CPU topologies ...~n", []),
-    {ok, [Data]} = file:consult("../test/cpu_topo_data"),
+    {ok, [Data]} = file:consult("test/cpu_topo_data"),
     [run_convert_and_jsonify(Item) || Item <- Data].
 
 

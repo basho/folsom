@@ -55,7 +55,14 @@ get_process_info() ->
     [{pid_port_fun_to_atom(Pid), get_process_info(Pid)} || Pid <- processes()].
 
 get_port_info() ->
-    [{pid_port_fun_to_atom(Port), get_port_info(Port)} || Port <- erlang:ports()].
+    %% Erlang doesn't like you getting the stats for the forker process,
+    %% will crash the VM
+    Ports =
+        lists:filter(fun(P) ->
+                            not ({name, "forker"} == erlang:port_info(P, name))
+                        end,
+                        erlang:ports()),
+    [{pid_port_fun_to_atom(Port), get_port_info(Port)} || Port <- Ports].
 
 get_ets_info() ->
     [{Tab, get_ets_dets_info(ets, Tab)} || Tab <- ets:all()].

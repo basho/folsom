@@ -23,6 +23,7 @@
 
 -module(slide_statem_eqc).
 
+-compile(nowarn_export_all).
 -compile(export_all).
 
 -ifdef(TEST).

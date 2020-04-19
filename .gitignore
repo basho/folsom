@@ -2,4 +2,6 @@
 /.eunit
 ebin/*
 *#
-*~
+_build/
+.DS_Store
+rebar.lock
